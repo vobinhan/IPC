@@ -1,730 +1,317 @@
 # Roadmap Socket
 
-Mình đề xuất chia thành 10 chương.
-
-```text
-Module 1
-Socket là gì?
-
-↓
-
-Module 2
-Socket trong Kernel hoạt động như thế nào?
-
-↓
-
-Module 3
-File Descriptor và Socket
-
-↓
-
-Module 4
-Unix Domain Socket (IPC)
-
-↓
-
-Module 5
-TCP Socket
-
-↓
-
-Module 6
-UDP Socket
-
-↓
-
-Module 7
-Socket Buffer
-
-↓
-
-Module 8
-Blocking / Non-blocking
-
-↓
-
-Module 9
-select / poll / epoll
-
-↓
-
-Module 10
-Socket Architecture
+```mermaid
+graph TD
+    M1["Module 1<br/>Socket là gì?"] --> M2["Module 2<br/>Socket trong Kernel hoạt động như thế nào?"]
+    M2 --> M3["Module 3<br/>File Descriptor và Socket"]
+    M3 --> M4["Module 4<br/>Unix Domain Socket (IPC)"]
+    M4 --> M5["Module 5<br/>TCP Socket"]
+    M5 --> M6["Module 6<br/>UDP Socket"]
+    M6 --> M7["Module 7<br/>Socket Buffer"]
+    M7 --> M8["Module 8<br/>Blocking / Non-blocking"]
+    M8 --> M9["Module 9<br/>select / poll / epoll"]
+    M9 --> M10["Module 10<br/>Socket Architecture"]
 ```
-
-Hôm nay chúng ta học **Module 1 + Module 2**.
 
 ---
 
-# 1. Socket là gì?
-
-Đầu tiên hãy quên API đi.
+## 1. Socket là gì?
 
 Socket thực chất là:
 
 > **Một endpoint (điểm cuối) của một kênh giao tiếp.**
 
-Ví dụ:
-
-```text
-Process A
-     │
- Socket A
-
-==================
-
- Socket B
-     │
-Process B
+```mermaid
+graph LR
+    A["Process A"] --> SA["Socket A"]
+    SA -.->|kênh giao tiếp| SB["Socket B"]
+    SB --> B["Process B"]
 ```
 
-Hai process **không giao tiếp trực tiếp**.
-
-Mỗi process chỉ làm việc với socket của mình.
-
-Kernel chịu trách nhiệm chuyển dữ liệu giữa hai socket.
+Hai process **không giao tiếp trực tiếp**. Mỗi process chỉ làm việc với socket của mình. Kernel chịu trách nhiệm chuyển dữ liệu giữa hai socket.
 
 ---
 
-# Socket khác Shared Memory thế nào?
+## Socket khác Shared Memory thế nào?
 
-Shared Memory
+### Shared Memory
 
-```text
-Process A
-      │
-      ▼
- Shared RAM
-      ▲
-      │
-Process B
+```mermaid
+graph TD
+    A["Process A"] --> RAM["Shared RAM"]
+    B["Process B"] --> RAM
 ```
 
 Hai process cùng nhìn vào một vùng RAM.
 
----
+### Socket
 
-Socket
-
-```text
-Process A
-
-↓
-
-Socket
-
-↓
-
-Kernel
-
-↓
-
-Socket
-
-↓
-
-Process B
+```mermaid
+graph LR
+    A["Process A"] --> SA["Socket"] --> K["Kernel"] --> SB["Socket"] --> B["Process B"]
 ```
 
-Kernel luôn đứng giữa.
-
-Đó là sự khác biệt lớn nhất.
+Kernel luôn đứng giữa. Đó là sự khác biệt lớn nhất.
 
 ---
 
-# Socket khác Message Queue thế nào?
+## Socket khác Message Queue thế nào?
 
-Message Queue
+```mermaid
+graph LR
+    subgraph MQ["Message Queue"]
+        S1["Sender"] --> Q1["Kernel Queue"] --> R1["Receiver"]
+    end
 
-```text
-Sender
-
-↓
-
-Kernel Queue
-
-↓
-
-Receiver
+    subgraph SOCK["Socket"]
+        S2["Sender"] --> Q2["Socket Buffer"] --> R2["Receiver"]
+    end
 ```
 
-Socket
+Thoạt nhìn giống nhau, nhưng khác ở bản chất:
 
-```text
-Sender
+| Message Queue | Socket |
+|---|---|
+| Queue | Connection |
 
-↓
-
-Socket Buffer
-
-↓
-
-Receiver
-```
-
-Thoạt nhìn giống nhau.
-
-Nhưng khác ở chỗ:
-
-Message Queue
-
-```text
-Queue
-```
-
-Socket
-
-```text
-Connection
-```
-
-Socket tạo ra một **kênh giao tiếp liên tục**.
+Socket tạo ra một **kênh giao tiếp liên tục**, trong khi Message Queue chỉ truyền từng message rời rạc.
 
 ---
 
-# Tại sao phải có Socket?
+## Tại sao phải có Socket?
 
-Giả sử
+Giả sử:
 
-```text
-GUI
-
-↓
-
-Hardware Process
+```mermaid
+graph TD
+    GUI1["GUI"] --> HW["Hardware Process"]
 ```
 
-Có thể dùng
+Có thể dùng **Shared Memory** được.
 
-```text
-Shared Memory
+Nhưng nếu:
+
+```mermaid
+graph TD
+    GUI2["GUI"] --> Server["Server"] --> Client["Client"] --> Cloud["Cloud"]
 ```
 
-được.
-
----
-
-Nhưng nếu
-
-```text
-GUI
-
-↓
-
-Server
-
-↓
-
-Client
-
-↓
-
-Cloud
-```
-
-thì sao?
-
-Shared Memory không thể.
-
-Message Queue cũng không.
-
-Socket thì được.
-
----
+thì sao? Shared Memory không thể. Message Queue cũng không. **Socket thì được.**
 
 Socket được thiết kế để:
 
-* IPC trên cùng máy.
-* IPC giữa nhiều máy.
+- IPC trên cùng máy.
+- IPC giữa nhiều máy.
 
 API gần như giống nhau.
 
 ---
 
-# 2. Socket nằm ở đâu trong Kernel?
+## 2. Socket nằm ở đâu trong Kernel?
 
 Đây là phần quan trọng nhất.
 
-Nhiều người nghĩ:
+Nhiều người nghĩ socket kết nối trực tiếp giữa hai process — **không đúng**. Thực tế Kernel tạo ra một **object**:
 
-```text
-socket()
-
-↓
-
-Process A
-
-↓
-
-Process B
-```
-
-Không đúng.
-
-Kernel tạo một object.
-
-```text
-Process A
-
-↓
-
-File Descriptor
-
-↓
-
-Socket Object
-
-↓
-
-Kernel
+```mermaid
+graph TD
+    A["Process A"] --> FD["File Descriptor"] --> SO["Socket Object"] --> K["Kernel"]
 ```
 
 Socket Object nằm hoàn toàn trong Kernel Space.
 
 ---
 
-# Kiến trúc trong Kernel
+## Kiến trúc trong Kernel
 
-Có thể hình dung như sau:
+```mermaid
+graph TD
+    subgraph US1["User Space"]
+        PA["Process A<br/>socket fd"]
+    end
 
-```text
-+----------------------------------+
-|          User Space              |
-+----------------------------------+
+    PA -->|System Call| SC["System Call Interface"]
 
-Process A
+    subgraph KS["Kernel Space"]
+        SC --> SOBJ["Socket Object"]
+        SOBJ --> SB["Socket Buffer"]
+        SB --> PROTO["Protocol"]
+        PROTO --> DRV["Driver"]
+    end
 
-socket fd
+    subgraph US2["User Space"]
+        PB["Process B"]
+    end
 
-↓
-
-System Call
-
-------------------------------------
-
-Kernel Space
-
-Socket Object
-
-↓
-
-Socket Buffer
-
-↓
-
-Protocol
-
-↓
-
-Driver
-
-------------------------------------
-
-User Space
-
-Process B
+    DRV --> PB
 ```
 
 ---
 
-# Kernel tạo gì khi gọi socket()?
+## Kernel tạo gì khi gọi socket()?
 
 Giả sử:
 
 ```cpp
-socket(AF_UNIX,
-       SOCK_STREAM,
-       0);
+socket(AF_UNIX, SOCK_STREAM, 0);
 ```
 
-Kernel tạo:
+Kernel tạo một **Socket Object** chứa:
 
-```text
-Socket Object
-```
+- Domain
+- Type
+- Protocol
+- State
+- Receive Buffer
+- Send Buffer
+- File Operations
+- Reference Count
+- Credential
+- ...
 
-Object này chứa:
-
-```text
-Domain
-
-Type
-
-Protocol
-
-State
-
-Receive Buffer
-
-Send Buffer
-
-File Operations
-
-Reference Count
-
-Credential
-
-...
-```
-
-Có thể hình dung:
-
-```text
-+-------------------------------+
-
-Socket
-
-Domain = AF_UNIX
-
-Type = STREAM
-
-State = CREATED
-
-Receive Buffer
-
-Send Buffer
-
-Reference Count
-
-+-------------------------------+
+```mermaid
+graph TD
+    SO["Socket Object"]
+    SO --> D["Domain = AF_UNIX"]
+    SO --> T["Type = STREAM"]
+    SO --> S["State = CREATED"]
+    SO --> RB["Receive Buffer"]
+    SO --> SB["Send Buffer"]
+    SO --> RC["Reference Count"]
 ```
 
 ---
 
-# Socket Object nằm ở đâu?
+## Socket Object nằm ở đâu?
 
-Hoàn toàn trong:
+Hoàn toàn trong **Kernel Heap**. Process chỉ giữ **File Descriptor**.
 
-```text
-Kernel Heap
+```mermaid
+graph LR
+    P["Process<br/>FD Table"] -->|fd = 3| SO["Socket Object"]
 ```
 
-Process chỉ giữ:
+Giống Shared Memory: `fd → Kernel Object`.
 
-```text
-File Descriptor
+---
+
+## Socket Buffer
+
+Đây là phần cực kỳ quan trọng. Socket luôn có **Send Buffer** và **Receive Buffer**.
+
+```mermaid
+sequenceDiagram
+    participant A as Process A
+    participant SB as Send Buffer
+    participant K as Kernel
+    participant RB as Receive Buffer
+    participant B as Process B
+
+    A->>SB: write()
+    SB->>K: Chuyển dữ liệu
+    K->>RB: Đưa vào Receive Buffer
+    B->>RB: read()
 ```
 
-Ví dụ:
+Đây chính là lý do `write()` không phải lúc nào cũng gửi dữ liệu ngay lập tức — dữ liệu được đưa vào Send Buffer trước, kernel xử lý và chuyển đi sau.
 
-```text
-Process
+---
 
-FD Table
+## Socket có những loại nào?
 
-3
+Có hai cách phân loại: theo **Domain** và theo **Type**.
 
-↓
+### Theo Domain
 
-Socket Object
+```mermaid
+graph TD
+    D["Domain"] --> AFU["AF_UNIX<br/>Unix Domain Socket"]
+    D --> AFI["AF_INET<br/>IPv4"]
+    D --> AFI6["AF_INET6<br/>IPv6"]
+    D --> AFP["AF_PACKET<br/>Ethernet Frame"]
+    D --> AFN["AF_NETLINK<br/>Giao tiếp với Kernel"]
 ```
 
-Giống Shared Memory:
+| Domain | Mô tả | Ví dụ sử dụng |
+|---|---|---|
+| `AF_UNIX` | Chỉ dùng trên cùng máy (GUI ↔ Backend) | IPC nội bộ |
+| `AF_INET` | IPv4 (vd: `192.168.1.100`) | Giao tiếp mạng |
+| `AF_INET6` | IPv6 | Giao tiếp mạng |
+| `AF_PACKET` | Làm việc trực tiếp với Ethernet Frame | Wireshark, tcpdump |
+| `AF_NETLINK` | Giao tiếp với Kernel | iproute2, udev, NetworkManager |
 
-```text
-fd
+### Theo Type
 
-↓
+```mermaid
+graph TD
+    T["Type"] --> STREAM["SOCK_STREAM<br/>TCP / Unix Stream"]
+    T --> DGRAM["SOCK_DGRAM<br/>UDP / Unix Datagram"]
+    T --> SEQ["SOCK_SEQPACKET<br/>Connection + giữ ranh giới message"]
+    T --> RAW["SOCK_RAW<br/>Thao tác trực tiếp với packet"]
+```
 
-Kernel Object
+| Type | Đặc điểm | Ví dụ |
+|---|---|---|
+| `SOCK_STREAM` | Connection, Reliable, Ordered | SSH, HTTP, HTTPS |
+| `SOCK_DGRAM` | Không connection, không đảm bảo, nhanh | DNS, Video Streaming, VoIP |
+| `SOCK_SEQPACKET` | Giữ nguyên ranh giới message, có kết nối | Một số hệ thống IPC nội bộ |
+| `SOCK_RAW` | Socket thô, thao tác trực tiếp với packet | ping, tcpdump, Wireshark |
+
+---
+
+## Kiến trúc tổng thể
+
+```mermaid
+graph TD
+    subgraph US1["User Space"]
+        PA["Process A<br/>FD = 3"]
+    end
+
+    PA -->|socket()| SC["System Call"]
+
+    subgraph KS["Kernel Space"]
+        SC --> SOBJ["Socket Object"]
+        SOBJ --> SB["Send Buffer"]
+        SB --> PROTO["Protocol"]
+        PROTO --> RB["Receive Buffer"]
+    end
+
+    subgraph US2["User Space"]
+        PB["Process B<br/>FD = 5"]
+    end
+
+    RB --> PB
 ```
 
 ---
 
-# Socket Buffer
-
-Đây là phần cực kỳ quan trọng.
-
-Socket luôn có:
-
-```text
-Send Buffer
-
-Receive Buffer
-```
-
-Ví dụ:
-
-```text
-Process A
-
-↓
-
-write()
-
-↓
-
-Send Buffer
-
-↓
-
-Kernel
-
-↓
-
-Receive Buffer
-
-↓
-
-read()
-
-↓
-
-Process B
-```
-
-Đây chính là lý do:
-
-```text
-write()
-```
-
-không phải lúc nào cũng gửi dữ liệu ngay lập tức.
-
----
-
-# Socket có những loại nào?
-
-Có hai cách phân loại.
-
-## Theo Domain
-
-### AF_UNIX
-
-Hay còn gọi:
-
-```text
-Unix Domain Socket
-```
-
-Chỉ dùng trên cùng máy.
-
-```text
-GUI
-
-↓
-
-Backend
-```
-
----
-
-### AF_INET
-
-IPv4.
-
-```text
-192.168.1.100
-```
-
----
-
-### AF_INET6
-
-IPv6.
-
----
-
-### AF_PACKET
-
-Làm việc trực tiếp với Ethernet Frame.
-
-Driver.
-
-Network Analyzer.
-
-Ví dụ:
-
-```text
-Wireshark
-tcpdump
-```
-
----
-
-### AF_NETLINK
-
-Giao tiếp với Kernel.
-
-Ví dụ:
-
-```text
-iproute2
-udev
-NetworkManager
-```
-
----
-
-# Theo Type
-
-## SOCK_STREAM
-
-```text
-TCP
-
-Unix Stream
-```
-
-Đặc điểm:
-
-```text
-Connection
-
-Reliable
-
-Ordered
-```
-
-Ví dụ:
-
-```text
-SSH
-
-HTTP
-
-HTTPS
-```
-
----
-
-## SOCK_DGRAM
-
-```text
-UDP
-
-Unix Datagram
-```
-
-Đặc điểm:
-
-```text
-Không connection
-
-Không đảm bảo
-
-Nhanh
-```
-
-Ví dụ:
-
-```text
-DNS
-
-Video Streaming
-
-VoIP
-```
-
----
-
-## SOCK_SEQPACKET
-
-Giữ nguyên ranh giới message, có kết nối.
-
-Ít phổ biến hơn nhưng được dùng trong một số hệ thống IPC và giao tiếp nội bộ.
-
----
-
-## SOCK_RAW
-
-Socket thô.
-
-Cho phép thao tác trực tiếp với packet.
-
-Ví dụ:
-
-```text
-ping
-
-tcpdump
-
-Wireshark
-```
-
----
-
-# Kiến trúc tổng thể
-
-```text
-                  User Space
-
-Process A
-
-↓
-
-FD = 3
-
-↓
-
-socket()
-
-↓
-
-==================================
-
-Kernel Space
-
-Socket Object
-
-↓
-
-Send Buffer
-
-↓
-
-Protocol
-
-↓
-
-Receive Buffer
-
-==================================
-
-↓
-
-FD = 5
-
-↓
-
-Process B
-```
-
----
-
-# Trong Embedded Linux người ta dùng loại nào?
-
-Nếu bạn làm **Embedded Linux**, khoảng **90% trường hợp** bạn sẽ gặp:
-
-| Loại                                             | Mục đích                                |
-| ------------------------------------------------ | --------------------------------------- |
-| **Unix Domain Socket (`AF_UNIX + SOCK_STREAM`)** | IPC giữa các process trên cùng máy      |
-| **TCP Socket (`AF_INET + SOCK_STREAM`)**         | Giao tiếp với server hoặc thiết bị khác |
-| **UDP Socket (`AF_INET + SOCK_DGRAM`)**          | Streaming, telemetry, sensor            |
+## Trong Embedded Linux người ta dùng loại nào?
+
+Nếu làm **Embedded Linux** sẽ gặp:
+
+| Loại | Mục đích |
+|---|---|
+| **Unix Domain Socket** (`AF_UNIX + SOCK_STREAM`) | IPC giữa các process trên cùng máy |
+| **TCP Socket** (`AF_INET + SOCK_STREAM`) | Giao tiếp với server hoặc thiết bị khác |
+| **UDP Socket** (`AF_INET + SOCK_DGRAM`) | Streaming, telemetry, sensor |
 
 Ví dụ trong máy siêu âm:
 
-```text
-GUI
-        │
-Unix Domain Socket
-        │
-Image Processing Service
-        │
-Shared Memory
-        │
-Ultrasound Driver
+```mermaid
+graph TD
+    GUI["GUI"] -->|Unix Domain Socket| IPS["Image Processing Service"]
+    IPS -->|Shared Memory| DRV["Ultrasound Driver"]
 ```
 
 Ở đây:
 
-* **Socket** truyền lệnh như `START_SCAN`, `FREEZE`, `SAVE_IMAGE`.
-* **Shared Memory** truyền frame ảnh siêu âm.
-* Đây là một kiến trúc rất phổ biến trong các hệ thống nhúng hiệu năng cao.
+- **Socket** truyền lệnh như `START_SCAN`, `FREEZE`, `SAVE_IMAGE`.
+- **Shared Memory** truyền frame ảnh siêu âm.
+- Đây là một kiến trúc rất phổ biến trong các hệ thống nhúng hiệu năng cao.
 
 ---
 
-# Lộ trình tiếp theo
+## Lộ trình tiếp theo
 
 Sau khi nắm vững hai module đầu tiên, nên tiếp tục với:
 
@@ -732,315 +319,156 @@ Sau khi nắm vững hai module đầu tiên, nên tiếp tục với:
 
 Đây là IPC thuần túy, rất giống Shared Memory và Message Queue nhưng mạnh hơn nhiều. Sau khi hiểu rõ Unix Domain Socket, việc chuyển sang TCP/UDP sẽ rất tự nhiên vì API gần như giống hệt nhau, chỉ khác `domain` và cách `bind()` địa chỉ.
 
+---
 
+## Socket - Mindmap tổng quan (Module 1 & Module 2)
 
-
-# Socket - Mindmap tổng quan (Module 1 & Module 2)
-
-```text
-SOCKET
-│
-├── 1. Socket là gì?
-│   │
-│   ├── Endpoint của một kênh giao tiếp
-│   ├── Là cầu nối giữa hai tiến trình hoặc hai máy
-│   ├── Kernel chịu trách nhiệm truyền dữ liệu
-│   └── Process chỉ thao tác với File Descriptor
-│
-├── 2. Socket hoạt động ở đâu?
-│   │
-│   ├── User Space
-│   │      │
-│   │      ├── Process A
-│   │      └── Process B
-│   │
-│   └── Kernel Space
-│          │
-│          ├── Socket Object
-│          ├── Send Buffer
-│          ├── Receive Buffer
-│          ├── Protocol Stack
-│          └── Driver
-│
-├── 3. Kernel tạo gì khi socket()?
-│   │
-│   ├── Socket Object
-│   │      │
-│   │      ├── Domain
-│   │      ├── Type
-│   │      ├── Protocol
-│   │      ├── State
-│   │      ├── Send Buffer
-│   │      ├── Receive Buffer
-│   │      ├── File Operations
-│   │      └── Reference Count
-│   │
-│   └── Trả về File Descriptor
-│
-├── 4. Kiến trúc truyền dữ liệu
-│   │
-│   ├── write(fd)
-│   │      │
-│   │      ▼
-│   │  Send Buffer
-│   │      │
-│   │      ▼
-│   │ Protocol Stack
-│   │      │
-│   │      ▼
-│   │ Receive Buffer
-│   │      │
-│   │      ▼
-│   └── read(fd)
-│
-├── 5. Socket Buffer
-│   │
-│   ├── Send Buffer
-│   ├── Receive Buffer
-│   ├── Kernel quản lý
-│   ├── Có thể Blocking
-│   └── Có thể Non-blocking
-│
-├── 6. File Descriptor
-│   │
-│   ├── socket() → fd
-│   ├── fd chỉ là Handle
-│   ├── fd → Socket Object
-│   └── Mỗi Process có FD Table riêng
-│
-├── 7. Domain (Address Family)
-│   │
-│   ├── AF_UNIX
-│   │      └── IPC trên cùng máy
-│   │
-│   ├── AF_INET
-│   │      └── IPv4
-│   │
-│   ├── AF_INET6
-│   │      └── IPv6
-│   │
-│   ├── AF_PACKET
-│   │      └── Ethernet Frame
-│   │
-│   └── AF_NETLINK
-│          └── User Space ↔ Kernel
-│
-├── 8. Type
-│   │
-│   ├── SOCK_STREAM
-│   │      │
-│   │      ├── Connection-oriented
-│   │      ├── Reliable
-│   │      ├── Ordered
-│   │      └── TCP / Unix Stream
-│   │
-│   ├── SOCK_DGRAM
-│   │      │
-│   │      ├── Connectionless
-│   │      ├── Unreliable
-│   │      └── UDP / Unix Datagram
-│   │
-│   ├── SOCK_SEQPACKET
-│   │      └── Connection + giữ nguyên Message
-│   │
-│   └── SOCK_RAW
-│          └── Raw Packet
-│
-├── 9. So sánh IPC
-│   │
-│   ├── Shared Memory
-│   │      ├── Chia sẻ RAM
-│   │      ├── Không copy
-│   │      ├── Rất nhanh
-│   │      └── Cần Semaphore
-│   │
-│   ├── Message Queue
-│   │      ├── Kernel Queue
-│   │      ├── Copy User→Kernel→User
-│   │      ├── Event / Command
-│   │      └── Priority
-│   │
-│   └── Socket
-│          ├── Kernel Socket Object
-│          ├── Full Duplex
-│          ├── IPC hoặc Network
-│          └── Stream hoặc Datagram
-│
-└── 10. Embedded Linux Architecture
-    │
-    ├── GUI
-    │      │
-    │      ▼
-    ├── Unix Domain Socket
-    │      │
-    │      ▼
-    ├── Image Processing Service
-    │      │
-    │      ▼
-    ├── Shared Memory
-    │      │
-    │      ▼
-    └── Driver / Hardware
+```mermaid
+mindmap
+  root((SOCKET))
+    1. Socket là gì?
+      Endpoint của kênh giao tiếp
+      Cầu nối giữa hai process/hai máy
+      Kernel chịu trách nhiệm truyền dữ liệu
+      Process chỉ thao tác với FD
+    2. Socket hoạt động ở đâu?
+      User Space
+        Process A
+        Process B
+      Kernel Space
+        Socket Object
+        Send Buffer
+        Receive Buffer
+        Protocol Stack
+        Driver
+    3. Kernel tạo gì khi socket?
+      Socket Object
+        Domain
+        Type
+        Protocol
+        State
+        Send/Receive Buffer
+        File Operations
+        Reference Count
+      Trả về File Descriptor
+    4. Kiến trúc truyền dữ liệu
+      write fd
+      Send Buffer
+      Protocol Stack
+      Receive Buffer
+      read fd
+    5. Socket Buffer
+      Send Buffer
+      Receive Buffer
+      Kernel quản lý
+      Blocking
+      Non-blocking
+    6. File Descriptor
+      socket returns fd
+      fd la Handle
+      fd tro Socket Object
+      Moi Process co FD Table rieng
+    7. Domain
+      AF_UNIX
+      AF_INET
+      AF_INET6
+      AF_PACKET
+      AF_NETLINK
+    8. Type
+      SOCK_STREAM
+      SOCK_DGRAM
+      SOCK_SEQPACKET
+      SOCK_RAW
+    9. So sanh IPC
+      Shared Memory
+      Message Queue
+      Socket
+    10. Embedded Linux Architecture
+      GUI
+      Unix Domain Socket
+      Image Processing Service
+      Shared Memory
+      Driver Hardware
 ```
 
 ---
 
-# Kiến thức cốt lõi cần nhớ
+## Kiến thức cốt lõi cần nhớ
 
 ### Socket = Endpoint
 
+```mermaid
+graph LR
+    A["Process A"] --> SA["Socket A"]
+    SA -.-> SB["Socket B"]
+    SB --> B["Process B"]
 ```
-Process A
-     │
- Socket A
-
-===========
-
- Socket B
-     │
-Process B
-```
-
----
 
 ### Socket Object nằm trong Kernel
 
+```mermaid
+graph LR
+    P["Process"] --> FD["File Descriptor"] --> SO["Socket Object"]
 ```
-Process
-   │
- File Descriptor
-   │
-   ▼
-Socket Object
-```
-
----
 
 ### Dữ liệu luôn đi qua Kernel
 
+```mermaid
+graph LR
+    W["write()"] --> SB["Send Buffer"] --> PR["Protocol"] --> RB["Receive Buffer"] --> R["read()"]
 ```
-write()
-
-↓
-
-Send Buffer
-
-↓
-
-Protocol
-
-↓
-
-Receive Buffer
-
-↓
-
-read()
-```
-
----
 
 ### Socket khác Shared Memory
 
+```mermaid
+graph TD
+    subgraph SM["Shared Memory"]
+        A1["Process A"] --> RAM["RAM"]
+        B1["Process B"] --> RAM
+    end
+
+    subgraph SK["Socket"]
+        A2["Process A"] --> K["Kernel"] --> B2["Process B"]
+    end
 ```
-Shared Memory
-
-Process A
-
-↓
-
-RAM
-
-↑
-
-Process B
-```
-
-```
-Socket
-
-Process A
-
-↓
-
-Kernel
-
-↓
-
-Process B
-```
-
----
 
 ### Socket khác Message Queue
 
-```
-Message Queue
+```mermaid
+graph LR
+    subgraph MQ["Message Queue"]
+        S1["Sender"] --> Q1["Kernel Queue"] --> R1["Receiver"]
+    end
 
-Sender
-
-↓
-
-Kernel Queue
-
-↓
-
-Receiver
+    subgraph SC["Socket"]
+        S2["Process A"] --> C2["Connection"] --> R2["Process B"]
+    end
 ```
 
-```
-Socket
-
-Process A
-
-↓
-
-Connection
-
-↓
-
-Process B
-```
-
-Message Queue truyền từng **Message**.
-
-Socket tạo một **kênh giao tiếp liên tục (Connection)**.
+Message Queue truyền từng **Message**. Socket tạo một **kênh giao tiếp liên tục (Connection)**.
 
 ---
 
-# Những API sẽ học ở Module tiếp theo (Unix Domain Socket)
+## Những API sẽ học ở Module tiếp theo (Unix Domain Socket)
 
-```
-socket()
-
-bind()
-
-listen()
-
-accept()
-
-connect()
-
-send()
-
-recv()
-
-close()
+```mermaid
+graph LR
+    A["socket()"] --> B["bind()"] --> C["listen()"] --> D["accept()"]
+    E["connect()"] --> F["send()"] --> G["recv()"] --> H["close()"]
 ```
 
-Đây là bộ API nền tảng của Socket. Khi đã hiểu chúng với **Unix Domain Socket**, bạn gần như đã nắm được khoảng **90% API của TCP Socket**, vì sự khác biệt chủ yếu nằm ở **Address Family (`AF_UNIX` ↔ `AF_INET`)** và cách biểu diễn địa chỉ.
+Đây là bộ API nền tảng của Socket. Khi đã hiểu chúng với **Unix Domain Socket**, bạn gần như đã nắm được khoảng **90% API của TCP Socket**, vì sự khác biệt chủ yếu nằm ở **Address Family** (`AF_UNIX` ↔ `AF_INET`) và cách biểu diễn địa chỉ.
 
+### Ý nghĩa từng API
 
-
-# Ý nghĩa từng API
-| API         | Vai trò                                                             |
-| ----------- | ------------------------------------------------------------------- |
-| `socket()`  | Tạo socket object trong kernel, trả về file descriptor              |
-| `bind()`    | Gắn socket server với một địa chỉ, ở đây là `/tmp/demo_unix_socket` |
-| `listen()`  | Chuyển socket sang trạng thái chờ kết nối                           |
-| `accept()`  | Chấp nhận một client mới                                            |
-| `connect()` | Client kết nối tới server                                           |
-| `send()`    | Gửi dữ liệu                                                         |
-| `recv()`    | Nhận dữ liệu                                                        |
-| `close()`   | Đóng file descriptor                                                |
-| `unlink()`  | Xóa socket file trong filesystem                                    |
+| API | Vai trò |
+|---|---|
+| `socket()` | Tạo socket object trong kernel, trả về file descriptor |
+| `bind()` | Gắn socket server với một địa chỉ, ví dụ `/tmp/demo_unix_socket` |
+| `listen()` | Chuyển socket sang trạng thái chờ kết nối |
+| `accept()` | Chấp nhận một client mới |
+| `connect()` | Client kết nối tới server |
+| `send()` | Gửi dữ liệu |
+| `recv()` | Nhận dữ liệu |
+| `close()` | Đóng file descriptor |
+| `unlink()` | Xóa socket file trong filesystem |
